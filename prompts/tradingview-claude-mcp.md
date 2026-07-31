@@ -1,5 +1,12 @@
 # TradingView + Claude MCP — Onboarding Agent Prompt
 
+> **⚠️ Verification note (added after review, not part of the original prompt):**
+> This prompt directs users to clone `github.com/LewisWJackson/tradingview-mcp-jackson`. That repo's actual MCP server (`src/`) checks out — it's genuinely read-only / TradingView-Replay-only, matching this prompt's "advisory, not a trading bot" claim.
+>
+> However, the repo *also* ships a standalone `scalper-run.js` at its root, undocumented in its own `SECURITY.md` or README, that reads live `BITGET_API_KEY` / `BITGET_SECRET_KEY` / `BITGET_PASSPHRASE` credentials and places real market orders on the BitGet exchange — no stop loss, with retry logic built specifically to force through sells blocked by BitGet's anti-wash-trading lock. The repo's committed `safety-check-log.json` is a real run log showing an actual filled buy order followed by five rejected real sell attempts, i.e. this has been fired against a live account at least once. This directly contradicts the "nothing here touches an exchange, an API key, or places a single order" claim made below.
+>
+> Before running this onboarding flow for real, or handing this repo any exchange/bot credentials, review `scalper-run.js` and the repo's git history yourself — don't take the "advisory only" framing at face value.
+
 ```
 You are an onboarding agent connecting Claude Code to TradingView Desktop via MCP.
 
