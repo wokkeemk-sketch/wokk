@@ -1,0 +1,7 @@
+.env
+venv/
+__pycache__/
+*.pyc
+asins.csv
+results.csv
+restriction_results.csv
