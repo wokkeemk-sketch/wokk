@@ -1,15 +1,21 @@
 # Amazon Ungated Product Tools
 
-Two tools for figuring out what you can list on Amazon without going
-through category/brand approval:
+Tools for figuring out what you can list on Amazon without going through
+category/brand approval:
 
 1. **[CHECKLIST.md](./CHECKLIST.md)** — a manual, no-setup workflow to vet
-   products in Seller Central before sourcing.
-2. **`check_listing_restrictions.py`** — a script that calls Amazon's
-   SP-API to programmatically check restriction status for a batch of
-   ASINs.
+   products in Seller Central (or via SellerAmp) before sourcing.
+2. **`find_ungated_products.py`** — searches Amazon's catalog by keyword
+   and returns only the results that are ungated for your account. Use
+   this to *discover* candidate products.
+3. **`check_listing_restrictions.py`** — checks restriction status for a
+   batch of ASINs you already have. Use this to *verify* a list you've
+   already sourced (e.g. from a supplier catalog).
 
-## Using the script
+Both scripts call Amazon's SP-API and need the same credentials — set up
+once, use either script.
+
+## Setup (shared by both scripts)
 
 ### 1. Get SP-API credentials
 
@@ -47,12 +53,24 @@ cp .env.example .env
 # SP_API_LWA_CLIENT_SECRET, SP_API_SELLER_ID
 ```
 
-### 4. Build your ASIN list
+## Option A: Discover ungated products by keyword
+
+```bash
+python find_ungated_products.py "silicone spatula set" -o results.csv -n 50 -m US
+```
+
+This searches the Amazon catalog for up to `-n` candidates matching your
+keywords, checks each one's restriction status, and writes only the
+ungated ones to `results.csv` (pass `--keep-gated` to write every
+candidate with its status instead of filtering).
+
+Output CSV columns: `asin`, `title`, `brand`, `restricted`, `reasons`, `error`
+(same meaning as below).
+
+## Option B: Verify a list of ASINs you already have
 
 Copy `asins.example.csv` to `asins.csv` and replace with the ASINs you're
-evaluating (one per row, header must include `asin`).
-
-### 5. Run it
+evaluating (one per row, header must include `asin`), then:
 
 ```bash
 python check_listing_restrictions.py asins.csv -o results.csv -m US
@@ -69,9 +87,12 @@ Output CSV columns:
 
 ### Rate limits
 
-The Listings Restrictions endpoint is rate-limited (default ~5 requests/sec
-burst, refilling slower). The script sleeps `--delay` seconds (default 1.1s)
-between calls; increase it if you see throttling errors.
+Both the Catalog Items search and Listings Restrictions endpoints are
+rate-limited (a few requests/sec, refilling slower). Each script sleeps
+`--delay` seconds (default 1.1s) between restriction-check calls; increase
+it if you see throttling errors. `find_ungated_products.py` checks
+restrictions for every candidate found, so a large `-n` will take
+proportionally longer.
 
 ## Notes
 
