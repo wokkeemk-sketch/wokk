@@ -60,6 +60,33 @@ Once merged to your default branch, `.github/workflows/post_short.yml` runs
 daily and posts one short automatically — pick **Actions > Post daily YouTube
 Short > Run workflow** any time to trigger it manually and check the result.
 
+## 6. (Optional but recommended) Natural-sounding voice
+
+By default narration uses a free, robotic offline voice (espeak-ng). To use a
+natural voice instead, reusing the same Google Cloud project from step 2:
+
+1. In [Google Cloud Console](https://console.cloud.google.com/), same project
+   as before, go to **APIs & Services > Library**, search **Cloud Text-to-Speech
+   API**, click **Enable**.
+2. You'll be prompted to attach a **billing account** (a card on file) — this
+   is required by Google to enable the API at all. At this project's usage
+   (~1 short/day, a few hundred characters each) you'll stay well under the
+   1-million-character/month free tier, so actual cost should be $0, but the
+   card itself is a real requirement, not optional.
+3. Go to **IAM & Admin > Service Accounts > Create Service Account**. Any name
+   is fine. Grant it the role **Cloud Text-to-Speech User**. Create it.
+4. Click the new service account > **Keys** tab > **Add Key > Create new key**
+   > **JSON**. This downloads a JSON key file.
+5. Open that file, copy its entire contents, and add it as a GitHub repo
+   secret named `GOOGLE_TTS_CREDENTIALS_JSON` (**Settings > Secrets and
+   variables > Actions > New repository secret** — paste the whole JSON as
+   the value).
+6. **Delete the downloaded key file afterwards.**
+
+Once that secret exists, every future run automatically uses the natural
+voice — no code changes needed. If it's ever missing or fails, rendering
+falls back to the robotic voice rather than breaking.
+
 ## Notes / limits to know about
 
 - **OAuth token expiry**: while your Google Cloud OAuth app is in "Testing"
