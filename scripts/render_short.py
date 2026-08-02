@@ -78,6 +78,43 @@ def _gradient(category: str):
     return img
 
 
+def _cover_crop(img, target_w: int, target_h: int):
+    src_w, src_h = img.size
+    scale = max(target_w / src_w, target_h / src_h)
+    new_w, new_h = int(src_w * scale) + 1, int(src_h * scale) + 1
+    img = img.resize((new_w, new_h))
+    left = (new_w - target_w) // 2
+    top = (new_h - target_h) // 2
+    return img.crop((left, top, left + target_w, top + target_h))
+
+
+def _darken(img, alpha: int = 80):
+    from PIL import Image
+
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, alpha))
+    return Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+
+
+def _prepare_background_image(fact: dict, tmp_dir: Path):
+    from PIL import Image
+
+    query = fact.get("image_query")
+    if query:
+        from fetch_image import fetch_fact_image
+
+        raw_path = tmp_dir / f"{fact['id']}_raw.jpg"
+        try:
+            if fetch_fact_image(query, raw_path):
+                img = Image.open(raw_path).convert("RGB")
+                img = _cover_crop(img, WIDTH, HEIGHT)
+                return _darken(img)
+        except Exception:
+            pass  # fall through to the gradient background below
+        finally:
+            raw_path.unlink(missing_ok=True)
+    return _gradient(fact["category"])
+
+
 def _draw_caption(draw, lines: list[str], font, y0: float, line_h: int):
     for i, line in enumerate(lines):
         bbox = draw.textbbox((0, 0), line, font=font)
@@ -89,10 +126,10 @@ def _draw_caption(draw, lines: list[str], font, y0: float, line_h: int):
         draw.text((x, y), line, font=font, fill=(255, 255, 255))
 
 
-def _make_caption_frame(category: str, lines: list[str], fontsize: int, y0: float, out_path: Path):
+def _make_caption_frame(base_img, lines: list[str], fontsize: int, y0: float, out_path: Path):
     from PIL import ImageDraw, ImageFont
 
-    img = _gradient(category)
+    img = base_img.copy()
     draw = ImageDraw.Draw(img)
     font = ImageFont.truetype(_font_path(), fontsize)
     line_h = int(fontsize * 1.15)
@@ -229,7 +266,9 @@ def render_short(fact: dict, out_name: str | None = None) -> Path:
     _background_pad(fact["category"], total_duration, bg_wav)
     _mix_audio(narration_wav, bg_wav, mixed_wav)
 
-    # --- one captioned, slowly-zooming clip per segment ---
+    # --- one captioned, slowly-zooming clip per segment, sharing one background photo ---
+    base_img = _prepare_background_image(fact, OUTPUT_DIR)
+
     hook_img = OUTPUT_DIR / f"{fid}_hook.png"
     body_img = OUTPUT_DIR / f"{fid}_body.png"
     outro_img = OUTPUT_DIR / f"{fid}_outro.png"
@@ -242,16 +281,16 @@ def render_short(fact: dict, out_name: str | None = None) -> Path:
 
     line_h = 70
     hook_y0 = 260 - (len(hook_lines) - 1) * line_h / 2
-    _make_caption_frame(fact["category"], hook_lines, 64, hook_y0, hook_img)
+    _make_caption_frame(base_img, hook_lines, 64, hook_y0, hook_img)
     _zoompan_clip(hook_img, hook_dur, hook_clip)
     _zoompan_clip(hook_img, GAP, hook_gap_clip)  # holds the hook frame through the pause
 
     body_y0 = HEIGHT / 2 - (len(body_lines) - 1) * (line_h + 10) / 2
-    _make_caption_frame(fact["category"], body_lines, 58, body_y0, body_img)
+    _make_caption_frame(base_img, body_lines, 58, body_y0, body_img)
     _zoompan_clip(body_img, body_dur, body_clip)
     _zoompan_clip(body_img, GAP, body_gap_clip)  # holds the body frame through the pause
 
-    _make_caption_frame(fact["category"], [outro_text], 56, HEIGHT - 320, outro_img)
+    _make_caption_frame(base_img, [outro_text], 56, HEIGHT - 320, outro_img)
     _zoompan_clip(outro_img, outro_dur, outro_clip)
 
     # Video segments must match the audio's [hook, gap, body, gap, outro] layout exactly,
