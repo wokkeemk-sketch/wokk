@@ -1,15 +1,20 @@
 """Render a fact into a vertical (1080x1920) YouTube Short using PIL + ffmpeg.
 
 Audio is fully synthesized (offline TTS narration + generated ambient pad) so
-there's zero copyright risk — nothing here is a real recording.
+there's zero copyright risk — nothing here is a real recording. Captions are
+baked into the frame with PIL rather than ffmpeg's drawtext filter, since not
+every ffmpeg build ships drawtext (some static/minimal builds omit it) — this
+way rendering doesn't depend on that filter being present.
 """
 import subprocess
 import textwrap
+import wave
 from pathlib import Path
 
 WIDTH, HEIGHT = 1080, 1920
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "outputs"
 GAP = 0.4  # seconds of silence between narration segments
+FPS = 30
 
 CATEGORY_COLORS = {
     "Space": ((15, 12, 41), (48, 43, 99)),
@@ -19,6 +24,10 @@ CATEGORY_COLORS = {
     "Animals": ((15, 60, 30), (45, 110, 60)),
     "Psychology": ((40, 15, 70), (100, 40, 130)),
     "Science": ((10, 40, 50), (20, 100, 110)),
+    "Colors": ((70, 20, 70), (200, 90, 150)),
+    "Numbers": ((20, 60, 90), (60, 150, 200)),
+    "Shapes": ((80, 50, 10), (220, 160, 60)),
+    "Letters": ((20, 70, 50), (60, 180, 120)),
 }
 DEFAULT_COLORS = ((20, 20, 30), (60, 60, 90))
 
@@ -31,6 +40,10 @@ CATEGORY_TONES = {
     "Animals": (130.81, 196.00),
     "Psychology": (116.54, 174.61),
     "Science": (110.0, 164.81),
+    "Colors": (130.81, 196.00),
+    "Numbers": (146.83, 220.00),
+    "Shapes": (116.54, 174.61),
+    "Letters": (130.81, 196.00),
 }
 DEFAULT_TONES = (110.0, 164.81)
 
@@ -49,7 +62,7 @@ def _font_path():
     )
 
 
-def _make_background(category: str, out_path: Path):
+def _gradient(category: str):
     from PIL import Image
 
     top, bottom = CATEGORY_COLORS.get(category, DEFAULT_COLORS)
@@ -62,26 +75,29 @@ def _make_background(category: str, out_path: Path):
         b = int(top[2] + (bottom[2] - top[2]) * t)
         for x in range(WIDTH):
             pixels[x, y] = (r, g, b)
+    return img
+
+
+def _draw_caption(draw, lines: list[str], font, y0: float, line_h: int):
+    for i, line in enumerate(lines):
+        bbox = draw.textbbox((0, 0), line, font=font)
+        w = bbox[2] - bbox[0]
+        x = (WIDTH - w) / 2
+        y = y0 + i * line_h
+        for dx, dy in ((-3, -3), (-3, 3), (3, -3), (3, 3), (-3, 0), (3, 0), (0, -3), (0, 3)):
+            draw.text((x + dx, y + dy), line, font=font, fill=(0, 0, 0))
+        draw.text((x, y), line, font=font, fill=(255, 255, 255))
+
+
+def _make_caption_frame(category: str, lines: list[str], fontsize: int, y0: float, out_path: Path):
+    from PIL import ImageDraw, ImageFont
+
+    img = _gradient(category)
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.truetype(_font_path(), fontsize)
+    line_h = int(fontsize * 1.15)
+    _draw_caption(draw, lines, font, y0, line_h)
     img.save(out_path)
-
-
-def _escape_drawtext(text: str) -> str:
-    # Sidestep drawtext's quoting rules: kill apostrophes, escape backslashes.
-    text = text.replace("\\", "\\\\")
-    text = text.replace("'", "’")
-    return text
-
-
-def _drawtext(text: str, y_expr: str, start: float, end: float, size: int, fade: float = 0.3) -> str:
-    escaped = _escape_drawtext(text)
-    font = _font_path()
-    # Inside the single-quoted alpha='...' value, commas don't need escaping.
-    alpha_expr = f"if(lt(t,{start}),0,if(lt(t,{start + fade}),(t-{start})/{fade},1))"
-    return (
-        f"drawtext=fontfile={font}:text='{escaped}':"
-        f"fontcolor=white:fontsize={size}:borderw=4:bordercolor=black@0.6:"
-        f"x=(w-text_w)/2:y={y_expr}:alpha='{alpha_expr}':enable='between(t,{start},{end})'"
-    )
 
 
 def _tts(text: str, out_path: Path, rate: int = 165):
@@ -104,11 +120,8 @@ def _silence(out_path: Path, duration: float = GAP):
 
 
 def _duration(path: Path) -> float:
-    out = subprocess.run(
-        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
-        check=True, capture_output=True, text=True,
-    )
-    return float(out.stdout.strip())
+    with wave.open(str(path), "rb") as f:
+        return f.getnframes() / f.getframerate()
 
 
 def _concat_audio(paths: list[Path], out_path: Path):
@@ -148,84 +161,109 @@ def _mix_audio(narration_path: Path, bg_path: Path, out_path: Path):
     subprocess.run(cmd, check=True)
 
 
-def render_short(fact: dict, out_name: str | None = None) -> Path:
-    OUTPUT_DIR.mkdir(exist_ok=True)
-    out_name = out_name or f"{fact['id']}.mp4"
-    out_path = OUTPUT_DIR / out_name
-    bg_path = OUTPUT_DIR / f"{fact['id']}_bg.png"
-
-    _make_background(fact["category"], bg_path)
-
-    hook_lines = textwrap.wrap(fact["hook"] + "?", width=20) or [""]
-    body_lines = textwrap.wrap(fact["body"], width=26) or [""]
-    outro_text = "Follow for more!"
-
-    # Synthesize narration per segment so timing matches the actual speech.
-    hook_wav = OUTPUT_DIR / f"{fact['id']}_hook.wav"
-    body_wav = OUTPUT_DIR / f"{fact['id']}_body.wav"
-    outro_wav = OUTPUT_DIR / f"{fact['id']}_outro.wav"
-    gap_wav = OUTPUT_DIR / f"{fact['id']}_gap.wav"
-    narration_wav = OUTPUT_DIR / f"{fact['id']}_narration.wav"
-    bg_wav = OUTPUT_DIR / f"{fact['id']}_bgpad.wav"
-    mixed_wav = OUTPUT_DIR / f"{fact['id']}_mixed.wav"
-
-    _tts(fact["hook"] + "?", hook_wav)
-    _tts(fact["body"], body_wav)
-    _tts(outro_text + "!", outro_wav)
-    _silence(gap_wav)
-
-    hook_dur = _duration(hook_wav)
-    body_dur = _duration(body_wav)
-    outro_dur = _duration(outro_wav)
-
-    hook_start, hook_end = 0.0, hook_dur
-    body_start = hook_end + GAP
-    body_end = body_start + body_dur
-    outro_start = body_end + GAP
-    outro_end = outro_start + outro_dur
-    total_duration = outro_end + 0.3
-
-    _concat_audio([hook_wav, gap_wav, body_wav, gap_wav, outro_wav], narration_wav)
-    _background_pad(fact["category"], total_duration, bg_wav)
-    _mix_audio(narration_wav, bg_wav, mixed_wav)
-
-    filters = []
-    line_h = 70
-    hook_y0 = 260 - (len(hook_lines) - 1) * line_h / 2
-    for i, line in enumerate(hook_lines):
-        filters.append(_drawtext(line, str(int(hook_y0 + i * line_h)), hook_start, hook_end, 64))
-
-    body_y0 = HEIGHT / 2 - (len(body_lines) - 1) * (line_h + 10) / 2
-    for i, line in enumerate(body_lines):
-        filters.append(
-            _drawtext(line, str(int(body_y0 + i * (line_h + 10))), body_start, body_end, 58)
-        )
-
-    filters.append(_drawtext(f"{outro_text} \U0001f514", "h-260", outro_start, outro_end, 56))
-
-    # Slow continuous zoom (Ken Burns) so a static gradient still reads as "video".
-    fps = 30
-    total_frames = max(1, round(total_duration * fps))
-    zoompan = (
-        f"zoompan=z='min(zoom+0.0006,1.15)':"
+def _zoompan_clip(image_path: Path, duration: float, out_path: Path):
+    total_frames = max(1, round(duration * FPS))
+    vf = (
+        f"zoompan=z='min(zoom+0.0008,1.15)':"
         f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-        f"d={total_frames}:s={WIDTH}x{HEIGHT}:fps={fps}"
+        f"d={total_frames}:s={WIDTH}x{HEIGHT}:fps={FPS}"
     )
-    vf = zoompan + "," + ",".join(filters)
-
     cmd = [
         "ffmpeg", "-y",
-        "-loop", "1", "-framerate", str(fps), "-i", str(bg_path),
-        "-i", str(mixed_wav),
-        "-vf", vf,
-        "-t", str(total_duration),
-        "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-shortest",
+        "-loop", "1", "-framerate", str(FPS), "-i", str(image_path),
+        "-vf", vf, "-t", str(duration),
+        "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
         str(out_path),
     ]
     subprocess.run(cmd, check=True)
 
-    for tmp in (bg_path, hook_wav, body_wav, outro_wav, gap_wav, narration_wav, bg_wav, mixed_wav):
+
+def _concat_videos(paths: list[Path], out_path: Path):
+    list_path = paths[0].parent / f"{out_path.stem}_concat.txt"
+    list_path.write_text("\n".join(f"file '{p}'" for p in paths))
+    cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_path), "-c", "copy", str(out_path)]
+    subprocess.run(cmd, check=True)
+    list_path.unlink(missing_ok=True)
+
+
+def _mux_audio(video_path: Path, audio_path: Path, out_path: Path):
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", str(video_path), "-i", str(audio_path),
+        "-c:v", "copy", "-c:a", "aac", "-shortest",
+        str(out_path),
+    ]
+    subprocess.run(cmd, check=True)
+
+
+def render_short(fact: dict, out_name: str | None = None) -> Path:
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    out_name = out_name or f"{fact['id']}.mp4"
+    out_path = OUTPUT_DIR / out_name
+    fid = fact["id"]
+
+    hook_lines = textwrap.wrap(fact["hook"] + "?", width=20) or [""]
+    body_lines = textwrap.wrap(fact["body"], width=26) or [""]
+    outro_text = "Follow for more! \U0001f514"
+
+    # --- narration, timed per segment ---
+    hook_wav = OUTPUT_DIR / f"{fid}_hook.wav"
+    body_wav = OUTPUT_DIR / f"{fid}_body.wav"
+    outro_wav = OUTPUT_DIR / f"{fid}_outro.wav"
+    gap_wav = OUTPUT_DIR / f"{fid}_gap.wav"
+    narration_wav = OUTPUT_DIR / f"{fid}_narration.wav"
+    bg_wav = OUTPUT_DIR / f"{fid}_bgpad.wav"
+    mixed_wav = OUTPUT_DIR / f"{fid}_mixed.wav"
+
+    _tts(fact["hook"] + "?", hook_wav)
+    _tts(fact["body"], body_wav)
+    _tts(outro_text, outro_wav)
+    _silence(gap_wav)
+
+    hook_dur = _duration(hook_wav)
+    body_dur = _duration(body_wav)
+    outro_dur = _duration(outro_wav) + 0.3
+
+    _concat_audio([hook_wav, gap_wav, body_wav, gap_wav, outro_wav], narration_wav)
+    total_duration = hook_dur + GAP + body_dur + GAP + outro_dur
+    _background_pad(fact["category"], total_duration, bg_wav)
+    _mix_audio(narration_wav, bg_wav, mixed_wav)
+
+    # --- one captioned, slowly-zooming clip per segment ---
+    hook_img = OUTPUT_DIR / f"{fid}_hook.png"
+    body_img = OUTPUT_DIR / f"{fid}_body.png"
+    outro_img = OUTPUT_DIR / f"{fid}_outro.png"
+    hook_clip = OUTPUT_DIR / f"{fid}_hook.mp4"
+    hook_gap_clip = OUTPUT_DIR / f"{fid}_hookgap.mp4"
+    body_clip = OUTPUT_DIR / f"{fid}_body.mp4"
+    body_gap_clip = OUTPUT_DIR / f"{fid}_bodygap.mp4"
+    outro_clip = OUTPUT_DIR / f"{fid}_outro.mp4"
+    video_only = OUTPUT_DIR / f"{fid}_video.mp4"
+
+    line_h = 70
+    hook_y0 = 260 - (len(hook_lines) - 1) * line_h / 2
+    _make_caption_frame(fact["category"], hook_lines, 64, hook_y0, hook_img)
+    _zoompan_clip(hook_img, hook_dur, hook_clip)
+    _zoompan_clip(hook_img, GAP, hook_gap_clip)  # holds the hook frame through the pause
+
+    body_y0 = HEIGHT / 2 - (len(body_lines) - 1) * (line_h + 10) / 2
+    _make_caption_frame(fact["category"], body_lines, 58, body_y0, body_img)
+    _zoompan_clip(body_img, body_dur, body_clip)
+    _zoompan_clip(body_img, GAP, body_gap_clip)  # holds the body frame through the pause
+
+    _make_caption_frame(fact["category"], [outro_text], 56, HEIGHT - 320, outro_img)
+    _zoompan_clip(outro_img, outro_dur, outro_clip)
+
+    # Video segments must match the audio's [hook, gap, body, gap, outro] layout exactly,
+    # otherwise captions drift out of sync with narration as gaps accumulate.
+    _concat_videos([hook_clip, hook_gap_clip, body_clip, body_gap_clip, outro_clip], video_only)
+    _mux_audio(video_only, mixed_wav, out_path)
+
+    for tmp in (
+        hook_wav, body_wav, outro_wav, gap_wav, narration_wav, bg_wav, mixed_wav,
+        hook_img, body_img, outro_img,
+        hook_clip, hook_gap_clip, body_clip, body_gap_clip, outro_clip, video_only,
+    ):
         tmp.unlink(missing_ok=True)
     return out_path
 
