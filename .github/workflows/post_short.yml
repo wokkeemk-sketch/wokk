@@ -1,9 +1,12 @@
 name: Post daily YouTube Short
 
+# Automatic daily posting is disabled (paused by request). The schedule
+# trigger below is commented out — workflow_dispatch (manual "Run workflow"
+# in the Actions tab) still works if you want to trigger a one-off run.
 on:
-  schedule:
-    - cron: "0 16 * * *" # 16:00 UTC daily
-  workflow_dispatch: {} # allows manual "Run workflow" for testing
+  # schedule:
+  #   - cron: "0 16 * * *" # 16:00 UTC daily
+  workflow_dispatch: {}
 
 permissions:
   contents: write
