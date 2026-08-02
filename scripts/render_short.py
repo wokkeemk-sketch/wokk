@@ -6,6 +6,8 @@ baked into the frame with PIL rather than ffmpeg's drawtext filter, since not
 every ffmpeg build ships drawtext (some static/minimal builds omit it) — this
 way rendering doesn't depend on that filter being present.
 """
+import json
+import os
 import subprocess
 import textwrap
 import wave
@@ -138,10 +140,43 @@ def _make_caption_frame(base_img, lines: list[str], fontsize: int, y0: float, ou
 
 
 def _tts(text: str, out_path: Path, rate: int = 165):
+    """Natural voice via Google Cloud TTS when credentials are configured,
+    otherwise falls back to offline espeak-ng so rendering never breaks."""
+    creds_json = os.environ.get("GOOGLE_TTS_CREDENTIALS_JSON")
+    if creds_json:
+        try:
+            _tts_google(text, out_path, creds_json)
+            return
+        except Exception as exc:
+            print(f"Google TTS failed ({exc}), falling back to espeak-ng")
+    _tts_espeak(text, out_path, rate)
+
+
+def _tts_espeak(text: str, out_path: Path, rate: int = 165):
     subprocess.run(
         ["espeak-ng", "-v", "en-us", "-s", str(rate), "-w", str(out_path), text],
         check=True,
     )
+
+
+def _tts_google(text: str, out_path: Path, creds_json: str):
+    from google.cloud import texttospeech
+    from google.oauth2 import service_account
+
+    credentials = service_account.Credentials.from_service_account_info(json.loads(creds_json))
+    client = texttospeech.TextToSpeechClient(credentials=credentials)
+    response = client.synthesize_speech(
+        input=texttospeech.SynthesisInput(text=text),
+        voice=texttospeech.VoiceSelectionParams(
+            language_code="en-US",
+            name=os.environ.get("GOOGLE_TTS_VOICE", "en-US-Neural2-F"),
+        ),
+        audio_config=texttospeech.AudioConfig(
+            audio_encoding=texttospeech.AudioEncoding.LINEAR16,
+            sample_rate_hertz=44100,
+        ),
+    )
+    out_path.write_bytes(response.audio_content)
 
 
 def _silence(out_path: Path, duration: float = GAP):
