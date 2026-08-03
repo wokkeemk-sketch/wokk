@@ -5,17 +5,63 @@ category/brand approval:
 
 1. **[CHECKLIST.md](./CHECKLIST.md)** — a manual, no-setup workflow to vet
    products in Seller Central (or via SellerAmp) before sourcing.
-2. **`find_ungated_products.py`** — searches Amazon's catalog by keyword
+2. **`analyze_leads.py`** — **start here if you already use SellerAmp and
+   Keepa.** No Amazon developer account needed. Feed it CSV exports from
+   either or both tools and it filters out gated ASINs, applies
+   beginner-friendly profit/rank/competition thresholds, and scores what's
+   left so you get a shortlist instead of a spreadsheet to eyeball. See
+   [Option C](#option-c-score-your-sellerampkeepa-exports-no-api-setup)
+   below.
+3. **`find_ungated_products.py`** — searches Amazon's catalog by keyword
    and returns only the results that are ungated for your account. Use
    this to *discover* candidate products.
-3. **`check_listing_restrictions.py`** — checks restriction status for a
+4. **`check_listing_restrictions.py`** — checks restriction status for a
    batch of ASINs you already have. Use this to *verify* a list you've
    already sourced (e.g. from a supplier catalog).
 
-Both scripts call Amazon's SP-API and need the same credentials — set up
-once, use either script.
+`find_ungated_products.py` and `check_listing_restrictions.py` call
+Amazon's SP-API and need the same developer credentials — set up once
+(see below), use either script. `analyze_leads.py` needs none of that.
 
-## Setup (shared by both scripts)
+## Option C: score your SellerAmp/Keepa exports (no API setup)
+
+```bash
+python analyze_leads.py --sellerapp sas_export.csv --keepa keepa_export.csv -o leads.csv
+```
+
+You can pass just one file if that's all you have — `--sellerapp` alone
+still gives you eligibility + profit/ROI, `--keepa` alone still gives you
+rank/competition/rating scoring (but no gating check, since Keepa doesn't
+know your account's eligibility).
+
+**Getting the input files:**
+
+- **SellerAmp SAS**: run a bulk scan (upload a list of ASINs, or scan a
+  Keepa export) and export the results to CSV. This is what gives you the
+  restriction/eligibility column plus live profit and ROI.
+- **Keepa**: build a filtered list in Product Finder (category, BSR range,
+  price range, etc.) and export to CSV. This gives you sales rank,
+  competing offer count, rating, and review count.
+
+Column headers don't need to match exactly — the script recognizes common
+naming variants from both tools' exports. If a column isn't showing up in
+the output, open the input CSV and compare its header against the
+`ALIASES` dict at the top of `analyze_leads.py`.
+
+By default it **drops gated/restricted ASINs** and anything that doesn't
+clear these thresholds: ROI ≥ 30%, profit ≥ $3/unit, sales rank ≤ 150,000,
+≤ 15 competing sellers, price $10–$50, rating ≥ 3.8. All of these are
+flags on the command line (`--min-roi`, `--max-rank`, `--max-sellers`,
+etc. — run `python analyze_leads.py --help` for the full list) since
+what's "good" varies by niche and budget. Filters only apply to fields
+that are actually present in your input, so a Keepa-only run (no ROI/profit
+data) won't get filtered on ROI.
+
+Output is a CSV sorted by a 0–100 score (weighted toward ROI, profit, rank,
+and competition) plus a top-N printout in the terminal so you don't have to
+open the file just to see if the run was worth it.
+
+## Setup (for Options A/B — the SP-API scripts only; skip this for Option C)
 
 ### 1. Get SP-API credentials
 
