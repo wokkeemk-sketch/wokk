@@ -1,0 +1,28 @@
+# Default watchlist and indicator parameters.
+# Override the watchlist at runtime with: python main.py --tickers AAPL MSFT
+
+watchlist:
+  - AAPL
+  - MSFT
+  - NVDA
+  - SPY
+  - QQQ
+
+lookback_period: 6mo   # yfinance period string, e.g. 3mo, 6mo, 1y, 2y
+interval: 1d           # 1d, 1h, etc.
+
+indicators:
+  rsi:
+    period: 14
+    oversold: 30
+    overbought: 70
+  macd:
+    fast: 12
+    slow: 26
+    signal: 9
+  ema_crossover:
+    fast: 20
+    slow: 50
+  bollinger:
+    period: 20
+    num_std: 2
