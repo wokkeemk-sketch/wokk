@@ -1,4 +1,4 @@
-"""Console and CSV reporting for ticker signals."""
+"""Console, plain-text, and CSV reporting for ticker signals."""
 
 import csv
 from datetime import datetime, timezone
@@ -6,6 +6,18 @@ from datetime import datetime, timezone
 from signals.strategy import TickerSignal
 
 _COLOR = {"BUY": "\033[32m", "SELL": "\033[31m", "HOLD": "\033[33m", "RESET": "\033[0m"}
+
+
+def format_report_text(results: list[TickerSignal]) -> str:
+    """Plain-text report (no ANSI colors) - suitable for email or logs."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines = [f"Trading Signals Report — {now}", "Not financial advice. Rule-based technical signals only.", ""]
+    for r in results:
+        lines.append(f"{r.ticker:<6} ${r.price:>9.2f}  {r.composite}")
+        for vote in r.votes:
+            lines.append(f"    {vote.name:<16} {vote.vote:<8} {vote.detail}")
+        lines.append("")
+    return "\n".join(lines)
 
 
 def print_report(results: list[TickerSignal]) -> None:

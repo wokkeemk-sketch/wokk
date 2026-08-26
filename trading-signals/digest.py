@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
-"""CLI entrypoint: fetch data, evaluate indicators, print/export signals.
+"""Daily digest: generate signals and email the report.
 
-This tool only reads market data and prints signals. It never places
-trades or touches brokerage/exchange accounts.
+Intended to be run on a schedule (cron / Task Scheduler) on a machine with
+normal internet access - not from a restricted sandbox. Reads SMTP
+credentials from environment variables; see .env.example.
 """
 
 import argparse
 import sys
 
+from dotenv import load_dotenv
+
 from signals.config import load_config
 from signals.data import fetch_history
-from signals.report import print_report, write_csv
+from signals.notify import send_email
+from signals.report import format_report_text
 from signals.strategy import evaluate
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Generate rule-based technical trading signals.")
+    load_dotenv()
+
+    parser = argparse.ArgumentParser(description="Generate signals and email the daily digest.")
     parser.add_argument("--tickers", nargs="+", help="Override the watchlist, e.g. --tickers AAPL MSFT")
     parser.add_argument("--config", default="config.yaml", help="Path to config.yaml")
-    parser.add_argument("--csv", help="Optional path to write results as CSV")
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -36,14 +41,13 @@ def main() -> int:
             print(f"Skipping {ticker}: {e}", file=sys.stderr)
 
     if not results:
-        print("No signals generated.", file=sys.stderr)
+        print("No signals generated - not sending an email.", file=sys.stderr)
         return 1
 
-    print_report(results)
-    if args.csv:
-        write_csv(results, args.csv)
-        print(f"Wrote {args.csv}")
-
+    body = format_report_text(results)
+    print(body)  # so cron logs capture it too
+    send_email(subject="Trading Signals Digest", body=body)
+    print("Digest emailed.")
     return 0
 
 

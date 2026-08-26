@@ -46,15 +46,51 @@ Edit `config.yaml` to change the default watchlist, lookback period, or any
 indicator's parameters (RSI thresholds, MACD/EMA periods, Bollinger
 band width).
 
+## Daily email digest
+
+`digest.py` generates the same report and emails it to you, via SMTP (works
+with Gmail using an app password). Meant to run on a schedule from a machine
+with normal internet access.
+
+1. Turn on 2-Step Verification on your Google account, then create an app
+   password at https://myaccount.google.com/apppasswords.
+2. `cp .env.example .env` and fill in `SMTP_USERNAME` / `SMTP_PASSWORD`
+   (the app password, not your normal login password) / `DIGEST_TO`.
+   `.env` is gitignored — never commit real credentials.
+3. Test it manually:
+
+   ```bash
+   python digest.py
+   ```
+
+4. Schedule it:
+
+   **macOS/Linux (cron)** — `crontab -e`, then add (7am daily; adjust the path):
+
+   ```
+   0 7 * * * cd /path/to/trading-signals && /usr/bin/python3 digest.py >> digest.log 2>&1
+   ```
+
+   **Windows (Task Scheduler)** — create a daily trigger that runs:
+
+   ```
+   python.exe C:\path\to\trading-signals\digest.py
+   ```
+
+   with "Start in" set to the `trading-signals` folder.
+
 ## Project layout
 
 ```
-main.py                  CLI entrypoint
+main.py                  interactive CLI entrypoint
+digest.py                 scheduled entrypoint — generates + emails the report
 config.yaml               watchlist + indicator parameters
+.env.example               SMTP credential template (copy to .env)
 signals/data.py           Yahoo Finance data fetching
 signals/indicators.py     RSI / MACD / EMA / Bollinger Band math
 signals/strategy.py       combines indicators into a per-ticker signal
-signals/report.py         console + CSV output
+signals/report.py         console + plain-text + CSV output
+signals/notify.py         SMTP email delivery
 tests/test_indicators.py  unit tests against synthetic price data
 ```
 
@@ -68,8 +104,9 @@ pytest tests/
 
 - **Different indicators or weights**: edit `signals/strategy.py` — each
   indicator just needs to append an `IndicatorVote`.
-- **Scheduling**: run `main.py` from cron/Task Scheduler for a daily digest,
-  or pipe `--csv` output into your own notifier (email/Slack/Telegram).
+- **Other delivery channels**: swap `signals/notify.py` for a Telegram bot
+  or Slack webhook call — `digest.py` just needs `format_report_text(results)`
+  handed to whatever you use to send it.
 - **Automated execution**: deliberately not included here. If you later want
   the tool to place real orders, that requires broker API credentials and
   should include hard safety limits (position size caps, stop-loss, a kill
